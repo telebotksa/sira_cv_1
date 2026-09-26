@@ -47,6 +47,11 @@ jobs:
           sed -i 's#<title>sira_cv</title>#<title>Free AI CV Maker</title>#; s#content="sira_cv"#content="Free AI CV Maker"#' web/index.html
           sed -i 's#"name": "sira_cv"#"name": "Free AI CV Maker"#; s#"short_name": "sira_cv"#"short_name": "AI CV Maker"#' web/manifest.json
 
+      # Plugins such as file_picker are compiled against an older Android API
+      # than their androidx dependencies require; force a newer compileSdk.
+      - name: Force compileSdk 36 for plugins
+        run: bash tool/force_compile_sdk.sh
+
       - run: flutter pub get
       - name: Generate launcher icons
         run: dart run flutter_launcher_icons
