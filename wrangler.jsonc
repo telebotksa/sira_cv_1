@@ -1,0 +1,7 @@
+{
+  "sira_cv_1": "my-app",
+  "compatibility_date": "2026-09-26",
+  "assets/icon": {
+    "directory": "./public"
+  }
+}
