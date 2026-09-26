@@ -1,10 +1,20 @@
-# Sira (سيرة) — multilingual resume builder
+# Free AI CV Maker
 
-Flutter app for Android, iOS and Web. Original code and design.
+Flutter resume builder for Android, iOS and Web. Original code and design.
 
-## First run
+## Features
 
-The project contains `lib/`, `test/` and `pubspec.yaml`. Generate the platform folders once:
+- Starts with a language picker (18 languages: ar, en, hi, zh, es, es-MX, id, de, fr, it, nl, nb, pl, pt, pt-BR, ro, tr, vi). Arabic is RTL.
+- Multi-resume management, auto-save locally.
+- Sections: personal details + photo, summary, experience, education, skills, languages, projects.
+- Photo editor: crop (pinch/drag), filters, brightness / contrast / saturation.
+- Date fields open a calendar picker; dates are shown localized.
+- Skills suggestions follow the script/language you typed the job title in, across 18 fields.
+- AI tab: resume review, job-description match, tailored summary, cover letter, full-resume translation,
+  plus AI buttons on the summary, experience bullets and skills.
+- 6 templates, 8 accent colors, live PDF preview, Save / Share / Print.
+
+## Run
 
 ```bash
 flutter create . --project-name sira_cv --org com.yourcompany --platforms=android,ios,web
@@ -14,41 +24,36 @@ flutter test
 flutter run
 ```
 
-`flutter create .` will not overwrite `lib/` or `pubspec.yaml`. If it replaces `test/widget_test.dart`
-with its default file, delete that file (it references a counter app).
+Delete `test/widget_test.dart` if `flutter create` generates it. On iOS add
+`NSPhotoLibraryUsageDescription` to `Info.plist`.
 
-### Platform notes
+PDF fonts (Cairo, Noto Sans, Devanagari, SC) are downloaded on first export, so the first export needs internet.
 
-- **iOS** (`ios/Runner/Info.plist`): add `NSPhotoLibraryUsageDescription` (used by the photo picker).
-- **Android**: nothing extra for gallery picking. Set your `applicationId` and app icon.
-- **Fonts / offline**: the PDF uses the Cairo font (Arabic + Latin) fetched on first export via the
-  `printing` package. To work fully offline, bundle a font in `assets/` and load it with
-  `pw.Font.ttf(await rootBundle.load(...))` in `lib/services/pdf_builder.dart`.
+## AI
 
-## What is included
+Without a server the app uses a basic offline mode (templates, keyword matching). For real AI, deploy
+`backend/worker.js` (see `backend/README.md`) and build with:
 
-- Multi-resume management (create, duplicate, delete), auto-save to local storage
-- Sections: personal details + photo, summary, experience, education, skills, languages, projects
-- 6 templates (3 free, 3 premium-gated), 8 accent colors, live PDF preview, print / share / save
-- 5 languages (ar, en, fr, es, tr) for both the app UI and the resume itself, with RTL support
-- Offline "smart" helpers: summary draft, strong action verbs, skill ideas, completeness score
+```bash
+flutter build apk --dart-define=AI_ENDPOINT=https://your-worker.workers.dev --dart-define=AI_TOKEN=your-token
+```
 
-## Not included yet (needs your accounts)
+In GitHub, set the repository variable `AI_ENDPOINT` (Settings > Secrets and variables > Actions > Variables).
+The daily free quota (5) is enforced in the app only; enforce real limits in the worker.
 
-- **Cloud accounts and sync**: data is local only. Add Firebase Auth + Firestore and mirror
-  `AppState` reads/writes (`lib/state/app_state.dart` is the single persistence point).
-- **Real purchases**: `showPaywall` is a demo unlock. Wire `in_app_purchase` or RevenueCat.
-- **LLM-based suggestions**: `lib/services/suggestions.dart` is rule-based; swap
-  `draftSummary` for a call to your own backend (never ship an API key inside the app).
+## Ads and paid premium
+
+See `docs/MONETIZATION.md`. Premium is currently a demo switch; ads SDK is not included.
 
 ## Structure
 
 ```
 lib/
-  main.dart               app entry, theme, localization delegates
-  core/                   l10n strings, template definitions
+  main.dart               entry, theme, first-run language screen
+  core/                   l10n + strings/, dates, templates
   models/resume.dart      data model + JSON
-  services/               pdf_builder.dart, suggestions.dart
-  state/app_state.dart    resumes, locale, premium, persistence
-  ui/                     home, editor (tabs), preview, settings, paywall
+  services/               pdf_builder, suggestions, ai_service
+  state/app_state.dart    resumes, locale, premium, AI quota
+  ui/                     home, editor, ai_tab, photo editor, date field, preview, settings, paywall
+backend/                  Cloudflare Worker AI proxy
 ```

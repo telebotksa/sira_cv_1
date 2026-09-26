@@ -5,50 +5,80 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../core/dates.dart';
 import '../core/l10n.dart';
 import '../core/templates.dart';
 import '../models/resume.dart';
 
 class _Fonts {
-  const _Fonts(this.regular, this.bold);
+  const _Fonts(this.regular, this.bold, [this.fallback = const []]);
   final pw.Font regular;
   final pw.Font bold;
+  final List<pw.Font> fallback;
 }
 
 /// Renders a [Resume] to PDF bytes. One implementation drives every template,
 /// so the on-screen preview and the exported file are always identical.
 class PdfBuilder {
-  static _Fonts? _cache;
+  static final Map<String, _Fonts> _cache = {};
 
-  /// Cairo covers Arabic + Latin. It is fetched once (needs internet on first
-  /// use); if that fails we fall back to Helvetica (Latin only).
-  /// To work fully offline, bundle a font file as an asset and use
-  /// pw.Font.ttf(await rootBundle.load(...)) instead.
-  static Future<_Fonts> _loadFonts() async {
-    if (_cache != null) return _cache!;
+  /// Fonts come from Google Fonts through the `printing` package and are
+  /// fetched once per script (needs internet on first use):
+  ///   Arabic -> Cairo, Hindi -> Noto Sans Devanagari, Chinese -> Noto Sans SC,
+  ///   everything else (Latin, Vietnamese, Polish, Romanian...) -> Noto Sans.
+  /// If the download fails we fall back to Helvetica (basic Latin only).
+  /// To work fully offline, bundle font files as assets and load them with
+  /// pw.Font.ttf(await rootBundle.load(...)).
+  static Future<_Fonts> _loadFonts(String lang) async {
+    final key = lang == 'ar' || lang == 'hi' || lang == 'zh' ? lang : 'latin';
+    final hit = _cache[key];
+    if (hit != null) return hit;
     try {
-      final r = await PdfGoogleFonts.cairoRegular();
-      final b = await PdfGoogleFonts.cairoBold();
-      return _cache = _Fonts(r, b);
+      _Fonts f;
+      switch (key) {
+        case 'ar':
+          f = _Fonts(await PdfGoogleFonts.cairoRegular(),
+              await PdfGoogleFonts.cairoBold());
+          break;
+        case 'hi':
+          f = _Fonts(
+            await PdfGoogleFonts.notoSansDevanagariRegular(),
+            await PdfGoogleFonts.notoSansDevanagariBold(),
+            [await PdfGoogleFonts.notoSansRegular()],
+          );
+          break;
+        case 'zh':
+          // The CJK font is large; regular is used for bold as well.
+          final regular = await PdfGoogleFonts.notoSansSCRegular();
+          f = _Fonts(regular, regular);
+          break;
+        default:
+          f = _Fonts(await PdfGoogleFonts.notoSansRegular(),
+              await PdfGoogleFonts.notoSansBold());
+      }
+      return _cache[key] = f;
     } catch (_) {
       return _Fonts(pw.Font.helvetica(), pw.Font.helveticaBold());
     }
   }
 
   static Future<Uint8List> build(Resume r, PdfPageFormat format) async {
-    final fonts = await _loadFonts();
+    final fonts = await _loadFonts(r.lang);
     final doc = pw.Document(
       title: r.displayName,
       author: r.fullName,
-      theme: pw.ThemeData.withFont(base: fonts.regular, bold: fonts.bold),
+      theme: pw.ThemeData.withFont(
+        base: fonts.regular,
+        bold: fonts.bold,
+        fontFallback: fonts.fallback,
+      ),
     );
     final b = _Builder(r);
     doc.addPage(
       pw.MultiPage(
         pageFormat: format,
         margin: const pw.EdgeInsets.all(34),
-        textDirection:
-            b.rtl ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+        textDirection: b.rtl ? pw.TextDirection.rtl : pw.TextDirection.ltr,
         build: (context) => b.widgets(),
       ),
     );
@@ -349,8 +379,8 @@ class _Builder {
       parts.where((p) => p.trim().isNotEmpty).map((p) => p.trim()).join(' · ');
 
   String _range(String start, String end, bool current) {
-    final e = current ? tr('present') : end.trim();
-    final st = start.trim();
+    final e = current ? tr('present') : Dates.format(end, r.lang);
+    final st = Dates.format(start, r.lang);
     if (st.isEmpty && e.isEmpty) return '';
     if (st.isEmpty) return e;
     if (e.isEmpty) return st;

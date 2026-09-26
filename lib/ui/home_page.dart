@@ -109,11 +109,11 @@ class HomePage extends StatelessWidget {
                       itemBuilder: (ctx) => [
                         PopupMenuItem(
                           value: 'dup',
-                          child: Text(ctx.tr('duplicate')),
+                          child: Text(ctx.trNow('duplicate')),
                         ),
                         PopupMenuItem(
                           value: 'del',
-                          child: Text(ctx.tr('delete')),
+                          child: Text(ctx.trNow('delete')),
                         ),
                       ],
                     ),

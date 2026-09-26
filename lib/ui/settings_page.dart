@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/l10n.dart';
 import '../state/app_state.dart';
+import 'language_page.dart';
 import 'tr.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -17,19 +18,33 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         children: [
           ListTile(
-            title: Text(
-              context.tr('uiLanguage'),
-              style: Theme.of(context).textTheme.titleSmall,
+            leading: const Icon(Icons.language),
+            title: Text(context.tr('uiLanguage')),
+            subtitle: Text(L10n.names[app.locale] ?? app.locale),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const LanguagePage()),
             ),
           ),
-          for (final code in L10n.supported)
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: TextFormField(
+              initialValue: app.aiEndpointOverride,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                labelText: context.tr('aiServer'),
+                helperText: context.tr('aiServerHint'),
+                prefixIcon: const Icon(Icons.auto_awesome),
+              ),
+              onChanged: app.setAiEndpoint,
+            ),
+          ),
+          if (app.ai.isRemote)
             ListTile(
-              title: Text(L10n.names[code]!),
-              trailing: app.locale == code
-                  ? Icon(Icons.check_circle,
-                      color: Theme.of(context).colorScheme.primary)
-                  : null,
-              onTap: () => app.setLocale(code),
+              leading: const Icon(Icons.bolt),
+              title: Text(context.tr('aiFreeLeft')),
+              trailing: Text(app.premium ? '∞' : '${app.aiLeft}'),
             ),
           const Divider(),
           SwitchListTile(

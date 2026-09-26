@@ -1,4 +1,4 @@
-name: Build Sira
+name: Build Free AI CV Maker
 
 on:
   push:
@@ -17,6 +17,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Optional. Set under Settings > Secrets and variables > Actions > Variables.
+      # AI_ENDPOINT is your AI proxy URL (see backend/README.md).
+      AI_ENDPOINT: ${{ vars.AI_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,25 +34,34 @@ jobs:
           channel: stable
           cache: true
 
-      # The repo only holds lib/, test/ and pubspec.yaml; generate platform folders here.
+      # The repo only holds lib/, test/, assets/ and pubspec.yaml; the platform
+      # folders are generated here.
       - name: Generate platform folders
         run: |
           flutter create . --project-name sira_cv --org com.telebot --platforms=android,web
           rm -f test/widget_test.dart
 
+      - name: Set the app name
+        run: |
+          sed -i 's/android:label="sira_cv"/android:label="Free AI CV Maker"/' android/app/src/main/AndroidManifest.xml
+          sed -i 's#<title>sira_cv</title>#<title>Free AI CV Maker</title>#; s#content="sira_cv"#content="Free AI CV Maker"#' web/index.html
+          sed -i 's#"name": "sira_cv"#"name": "Free AI CV Maker"#; s#"short_name": "sira_cv"#"short_name": "AI CV Maker"#' web/manifest.json
+
       - run: flutter pub get
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
 
       - name: Build Android APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=AI_ENDPOINT="$AI_ENDPOINT"
 
       - name: Build web
-        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/" --dart-define=AI_ENDPOINT="$AI_ENDPOINT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sira-apk
+          name: free-ai-cv-maker-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
       - uses: actions/upload-pages-artifact@v3

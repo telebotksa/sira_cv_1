@@ -5,6 +5,12 @@ String newId() =>
 
 String _s(Map<String, dynamic> m, String k) => (m[k] as String?) ?? '';
 
+/// Returns the stored id, or null when missing/empty so the constructor makes a new one.
+String? _id(Map<String, dynamic> m) {
+  final v = _s(m, 'id');
+  return v.isEmpty ? null : v;
+}
+
 class Experience {
   Experience({
     String? id,
@@ -33,7 +39,7 @@ class Experience {
       };
 
   factory Experience.fromJson(Map<String, dynamic> j) => Experience(
-        id: _s(j, 'id'),
+        id: _id(j),
         title: _s(j, 'title'),
         company: _s(j, 'company'),
         location: _s(j, 'location'),
@@ -69,7 +75,7 @@ class Education {
       };
 
   factory Education.fromJson(Map<String, dynamic> j) => Education(
-        id: _s(j, 'id'),
+        id: _id(j),
         degree: _s(j, 'degree'),
         school: _s(j, 'school'),
         location: _s(j, 'location'),
@@ -90,7 +96,7 @@ class Project {
       {'id': id, 'name': name, 'link': link, 'description': description};
 
   factory Project.fromJson(Map<String, dynamic> j) => Project(
-        id: _s(j, 'id'),
+        id: _id(j),
         name: _s(j, 'name'),
         link: _s(j, 'link'),
         description: _s(j, 'description'),
@@ -109,7 +115,7 @@ class LangSkill {
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'level': level};
 
   factory LangSkill.fromJson(Map<String, dynamic> j) => LangSkill(
-        id: _s(j, 'id'),
+        id: _id(j),
         name: _s(j, 'name'),
         level: (j['level'] as int?) ?? 2,
       );
@@ -156,6 +162,23 @@ class Resume {
   List<Project> projects;
   DateTime updatedAt;
 
+  /// True when the user has not entered anything yet.
+  bool get isBlank =>
+      fullName.trim().isEmpty &&
+      jobTitle.trim().isEmpty &&
+      email.trim().isEmpty &&
+      phone.trim().isEmpty &&
+      city.trim().isEmpty &&
+      website.trim().isEmpty &&
+      summary.trim().isEmpty &&
+      fileName.trim().isEmpty &&
+      (photoB64 == null || photoB64!.isEmpty) &&
+      experiences.isEmpty &&
+      education.isEmpty &&
+      skills.isEmpty &&
+      languages.isEmpty &&
+      projects.isEmpty;
+
   String get displayName {
     if (fileName.trim().isNotEmpty) return fileName.trim();
     if (fullName.trim().isNotEmpty) return fullName.trim();
@@ -191,7 +214,7 @@ class Resume {
             .toList();
 
     return Resume(
-      id: _s(j, 'id'),
+      id: _id(j),
       fileName: _s(j, 'fileName'),
       templateId: _s(j, 'templateId').isEmpty ? 'classic' : _s(j, 'templateId'),
       lang: _s(j, 'lang').isEmpty ? 'en' : _s(j, 'lang'),

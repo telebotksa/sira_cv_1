@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,13 +9,18 @@ import 'package:provider/provider.dart';
 import '../core/l10n.dart';
 import '../core/templates.dart';
 import '../models/resume.dart';
+import '../services/ai_service.dart';
 import '../services/suggestions.dart';
 import '../state/app_state.dart';
+import 'ai_helpers.dart';
+import 'ai_tab.dart';
+import 'date_field.dart';
 import 'paywall.dart';
+import 'photo_editor_page.dart';
 import 'preview_page.dart';
 import 'tr.dart';
 
-/// Editing screen: one tab per resume section plus a design tab.
+/// Editing screen: one tab per resume section, an AI tab and a design tab.
 /// Changes are auto-saved (debounced) and flushed when leaving the screen.
 class EditorPage extends StatefulWidget {
   const EditorPage({super.key, required this.resumeId});
@@ -31,6 +37,10 @@ class _EditorPageState extends State<EditorPage> {
   Timer? _timer;
   final _skillCtl = TextEditingController();
 
+  /// Bumped when AI rewrites a text field, so the field is rebuilt with the
+  /// new initial value.
+  int _rev = 0;
+
   static const _tabs = [
     'personal',
     'summary',
@@ -39,6 +49,7 @@ class _EditorPageState extends State<EditorPage> {
     'skills',
     'languages',
     'projects',
+    'ai',
     'design',
   ];
 
@@ -53,10 +64,16 @@ class _EditorPageState extends State<EditorPage> {
   void dispose() {
     _timer?.cancel();
     // Notifying listeners while the tree is being torn down is illegal, so
-    // the final save is deferred to a microtask.
+    // the final save is deferred to a microtask. Empty resumes are discarded.
     final app = _app;
     final r = _r;
-    scheduleMicrotask(() => app.save(r));
+    scheduleMicrotask(() {
+      if (r.isBlank) {
+        app.delete(r.id);
+      } else {
+        app.save(r);
+      }
+    });
     _skillCtl.dispose();
     super.dispose();
   }
@@ -85,22 +102,111 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
+  void _openResume(String id) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => EditorPage(resumeId: id)),
+    );
+  }
+
+  // ------------------------------------------------------------------- photo
+
+  Uint8List? _photoBytes() {
+    final p = _r.photoB64;
+    if (p == null || p.isEmpty) return null;
+    try {
+      return base64Decode(p);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _pickPhoto() async {
     final x = await ImagePicker().pickImage(
       source: ImageSource.gallery,
-      maxWidth: 480,
-      maxHeight: 480,
-      imageQuality: 80,
+      maxWidth: 1200,
+      maxHeight: 1200,
+      imageQuality: 90,
     );
     if (x == null) return;
     final bytes = await x.readAsBytes();
-    _r.photoB64 = base64Encode(bytes);
+    await _editPhoto(bytes);
+  }
+
+  Future<void> _editPhoto(Uint8List bytes) async {
+    if (!mounted) return;
+    final out = await Navigator.of(context).push<Uint8List>(
+      MaterialPageRoute(builder: (_) => PhotoEditorPage(bytes: bytes)),
+    );
+    if (out == null) return;
+    _r.photoB64 = base64Encode(out);
     _touch();
   }
 
+  // ---------------------------------------------------------------------- AI
+
+  Future<void> _aiBullets(Experience e) async {
+    final title = context.trNow('aiBullets');
+    final res = await runAi(
+      context,
+      AiTask.bullets,
+      _r,
+      input: '${e.title} ${e.company}'.trim(),
+    );
+    if (res == null || !mounted) return;
+    await showAiSheet(
+      context,
+      title: title,
+      result: res,
+      onApply: () {
+        final add = res.lines.join('\n');
+        final old = e.description.trim();
+        e.description = old.isEmpty ? add : '$old\n$add';
+        _rev++;
+        _touch();
+      },
+    );
+  }
+
+  Future<void> _aiImprove(Experience e) async {
+    if (e.description.trim().isEmpty) return;
+    final title = context.trNow('aiImprove');
+    final res = await runAi(context, AiTask.improve, _r, input: e.description);
+    if (res == null || !mounted) return;
+    await showAiSheet(
+      context,
+      title: title,
+      result: res,
+      onApply: () {
+        e.description = res.lines.join('\n');
+        _rev++;
+        _touch();
+      },
+    );
+  }
+
+  Future<void> _aiSkills() async {
+    final title = context.trNow('aiSkills');
+    final res = await runAi(
+      context,
+      AiTask.skills,
+      _r,
+      target: Suggestions.detectLang(_r),
+    );
+    if (res == null || !mounted) return;
+    await showAiSheet(
+      context,
+      title: title,
+      result: res,
+      onApply: () => _addSkills(res.lines),
+    );
+  }
+
+  // ------------------------------------------------------------------- build
+
   @override
   Widget build(BuildContext context) {
-    final title = _r.displayName.isEmpty ? context.tr('untitled') : _r.displayName;
+    final title =
+        _r.displayName.isEmpty ? context.tr('untitled') : _r.displayName;
 
     return DefaultTabController(
       length: _tabs.length,
@@ -129,6 +235,7 @@ class _EditorPageState extends State<EditorPage> {
             _skillsTab(),
             _languagesTab(),
             _projectsTab(),
+            AiTab(r: _r, onChanged: _touch, onOpenResume: _openResume),
             _designTab(),
           ],
         ),
@@ -139,15 +246,7 @@ class _EditorPageState extends State<EditorPage> {
   // ---------------------------------------------------------------- personal
 
   Widget _personalTab() {
-    final photo = _r.photoB64;
-    ImageProvider? img;
-    if (photo != null && photo.isNotEmpty) {
-      try {
-        img = MemoryImage(base64Decode(photo));
-      } catch (_) {
-        img = null;
-      }
-    }
+    final photoBytes = _photoBytes();
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -156,20 +255,28 @@ class _EditorPageState extends State<EditorPage> {
           children: [
             CircleAvatar(
               radius: 36,
-              backgroundImage: img,
-              child: img == null ? const Icon(Icons.person, size: 36) : null,
+              backgroundImage:
+                  photoBytes == null ? null : MemoryImage(photoBytes),
+              child:
+                  photoBytes == null ? const Icon(Icons.person, size: 36) : null,
             ),
             const SizedBox(width: 16),
             Expanded(
               child: Wrap(
                 spacing: 8,
+                runSpacing: 4,
                 children: [
                   OutlinedButton.icon(
                     onPressed: _pickPhoto,
                     icon: const Icon(Icons.photo_library_outlined),
                     label: Text(context.tr('choosePhoto')),
                   ),
-                  if (img != null)
+                  if (photoBytes != null) ...[
+                    OutlinedButton.icon(
+                      onPressed: () => _editPhoto(photoBytes),
+                      icon: const Icon(Icons.tune),
+                      label: Text(context.tr('editPhoto')),
+                    ),
                     TextButton(
                       onPressed: () {
                         _r.photoB64 = null;
@@ -177,6 +284,7 @@ class _EditorPageState extends State<EditorPage> {
                       },
                       child: Text(context.tr('removePhoto')),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -289,28 +397,31 @@ class _EditorPageState extends State<EditorPage> {
                 },
               ),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: _F(
+                    child: DateField(
                       key: ValueKey('${e.id}-start'),
                       label: context.tr('startDate'),
                       value: e.start,
+                      lang: _r.lang,
                       onChanged: (v) {
                         e.start = v;
-                        _save();
+                        _touch();
                       },
                     ),
                   ),
                   if (!e.current) ...[
                     const SizedBox(width: 12),
                     Expanded(
-                      child: _F(
+                      child: DateField(
                         key: ValueKey('${e.id}-end'),
                         label: context.tr('endDate'),
                         value: e.end,
+                        lang: _r.lang,
                         onChanged: (v) {
                           e.end = v;
-                          _save();
+                          _touch();
                         },
                       ),
                     ),
@@ -327,7 +438,7 @@ class _EditorPageState extends State<EditorPage> {
                 },
               ),
               _F(
-                key: ValueKey('${e.id}-desc'),
+                key: ValueKey('${e.id}-desc-$_rev'),
                 label: context.tr('description'),
                 value: e.description,
                 lines: 4,
@@ -335,6 +446,21 @@ class _EditorPageState extends State<EditorPage> {
                   e.description = v;
                   _save();
                 },
+              ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => _aiBullets(e),
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: Text(context.tr('aiBullets')),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _aiImprove(e),
+                    icon: const Icon(Icons.auto_fix_high, size: 18),
+                    label: Text(context.tr('aiImprove')),
+                  ),
+                ],
               ),
             ],
           ),
@@ -389,27 +515,30 @@ class _EditorPageState extends State<EditorPage> {
                 },
               ),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: _F(
+                    child: DateField(
                       key: ValueKey('${e.id}-start'),
                       label: context.tr('startDate'),
                       value: e.start,
+                      lang: _r.lang,
                       onChanged: (v) {
                         e.start = v;
-                        _save();
+                        _touch();
                       },
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _F(
+                    child: DateField(
                       key: ValueKey('${e.id}-end'),
                       label: context.tr('endDate'),
                       value: e.end,
+                      lang: _r.lang,
                       onChanged: (v) {
                         e.end = v;
-                        _save();
+                        _touch();
                       },
                     ),
                   ),
@@ -437,12 +566,18 @@ class _EditorPageState extends State<EditorPage> {
 
   // ------------------------------------------------------------------ skills
 
-  void _addSkill(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty || _r.skills.contains(s)) return;
-    _r.skills.add(s);
-    _skillCtl.clear();
-    _touch();
+  void _addSkills(Iterable<String> items) {
+    var changed = false;
+    for (final raw in items) {
+      final s = raw.trim();
+      if (s.isEmpty || _r.skills.contains(s)) continue;
+      _r.skills.add(s);
+      changed = true;
+    }
+    if (changed) {
+      _skillCtl.clear();
+      _touch();
+    }
   }
 
   Widget _skillsTab() {
@@ -457,12 +592,12 @@ class _EditorPageState extends State<EditorPage> {
               child: TextField(
                 controller: _skillCtl,
                 decoration: InputDecoration(labelText: context.tr('skillHint')),
-                onSubmitted: _addSkill,
+                onSubmitted: (v) => _addSkills([v]),
               ),
             ),
             const SizedBox(width: 8),
             IconButton.filled(
-              onPressed: () => _addSkill(_skillCtl.text),
+              onPressed: () => _addSkills([_skillCtl.text]),
               icon: const Icon(Icons.add),
             ),
           ],
@@ -482,6 +617,15 @@ class _EditorPageState extends State<EditorPage> {
               ),
           ],
         ),
+        const SizedBox(height: 16),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: FilledButton.tonalIcon(
+            onPressed: _aiSkills,
+            icon: const Icon(Icons.auto_awesome),
+            label: Text(context.tr('aiSkills')),
+          ),
+        ),
         if (ideas.isNotEmpty) ...[
           const SizedBox(height: 24),
           Text(context.tr('suggestions'),
@@ -495,7 +639,7 @@ class _EditorPageState extends State<EditorPage> {
                 ActionChip(
                   avatar: const Icon(Icons.add, size: 16),
                   label: Text(s),
-                  onPressed: () => _addSkill(s),
+                  onPressed: () => _addSkills([s]),
                 ),
             ],
           ),
@@ -772,7 +916,7 @@ class _F extends StatelessWidget {
   }
 }
 
-/// Summary tab: text + auto draft + completeness meter + action verbs.
+/// Summary tab: text, AI writing/improving, completeness meter, action verbs.
 class _SummaryTab extends StatefulWidget {
   const _SummaryTab({required this.r, required this.onChanged});
 
@@ -798,6 +942,32 @@ class _SummaryTabState extends State<_SummaryTab> {
     super.dispose();
   }
 
+  void _apply(String text) {
+    _ctl.text = text;
+    widget.r.summary = text;
+    widget.onChanged();
+    setState(() {});
+  }
+
+  Future<void> _generate() async {
+    final title = context.trNow('aiGenerate');
+    final res = await runAi(context, AiTask.summary, widget.r,
+        input: widget.r.summary);
+    if (res == null || !mounted) return;
+    await showAiSheet(context,
+        title: title, result: res, onApply: () => _apply(res.text));
+  }
+
+  Future<void> _improve() async {
+    if (widget.r.summary.trim().isEmpty) return _generate();
+    final title = context.trNow('aiImprove');
+    final res = await runAi(context, AiTask.improve, widget.r,
+        input: widget.r.summary);
+    if (res == null || !mounted) return;
+    await showAiSheet(context,
+        title: title, result: res, onApply: () => _apply(res.text));
+  }
+
   @override
   Widget build(BuildContext context) {
     final r = widget.r;
@@ -820,19 +990,21 @@ class _SummaryTabState extends State<_SummaryTab> {
           },
         ),
         const SizedBox(height: 12),
-        Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: FilledButton.tonalIcon(
-            icon: const Icon(Icons.auto_awesome),
-            label: Text(context.tr('generate')),
-            onPressed: () {
-              final text = Suggestions.draftSummary(r);
-              _ctl.text = text;
-              r.summary = text;
-              widget.onChanged();
-              setState(() {});
-            },
-          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.auto_awesome),
+              label: Text(context.tr('aiGenerate')),
+              onPressed: _generate,
+            ),
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.auto_fix_high),
+              label: Text(context.tr('aiImprove')),
+              onPressed: _improve,
+            ),
+          ],
         ),
         const SizedBox(height: 24),
         Text(context.tr('completeness'), style: theme.textTheme.titleSmall),
@@ -844,7 +1016,7 @@ class _SummaryTabState extends State<_SummaryTab> {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '${context.tr('missing')}: ${c.missing.map(context.tr).join('، ')}',
+              '${context.tr('missing')}: ${c.missing.map(context.tr).join(', ')}',
               style: theme.textTheme.bodySmall,
             ),
           ),
